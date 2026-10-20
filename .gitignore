@@ -1,0 +1,4 @@
+.env
+.gstack/
+__pycache__/
+discovery/results/
