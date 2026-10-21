@@ -1,5 +1,5 @@
 """Regras de negócio do adapter: normalização, busca em cascata, cache, negociação,
-lock por carga e máquina de estados do booking. `max_rate` (MAX_BUY) nunca sai daqui."""
+lock por carga e máquina de estados do booking. `max_rate` (MAX_BUY) só sai em get_load."""
 import re
 import threading
 import time
@@ -205,7 +205,10 @@ class Service:
         g = self._raw_get(load_id)
         if not is_bookable(g):
             raise LookupError("carga indisponível")
-        return public_load(g)
+        out = public_load(g)
+        if "MAX_BUY" in g:
+            out["max_rate"] = g["MAX_BUY"]   # só no detalhe: o agente grava no fluxo; a busca continua sem teto
+        return out
 
     def evaluate(self, load_id, ask):
         g = self._raw_get(load_id)

@@ -56,6 +56,11 @@ class ServiceTests(unittest.TestCase):
         self.assertEqual(out["loads"][0]["loadboard_rate"], 1000)
         self.assertTrue(out["loads"][0]["pickup_datetime"].endswith("Z"))
 
+    def test_max_rate_only_in_load_detail(self):
+        svc = Service(Stub())
+        self.assertEqual(svc.get_load("LD1")["max_rate"], 1100)
+        self.assertNotIn("max_rate", json.dumps(svc.search(origin_state="Georgia", equipment="power only")))
+
     def test_evaluate(self):
         self.assertEqual(evaluate_offer(1100, 1100), {"decision": "accept", "rate": 1100})
         self.assertEqual(evaluate_offer(1100, 900), {"decision": "accept", "rate": 900})
@@ -139,7 +144,8 @@ class HttpTests(unittest.TestCase):
 
     def test_no_ceiling_leak_and_flow(self):
         code, body = self.req("/loads/LD01031")
-        self.assertEqual(code, 200); self.assertNotIn("1100", body); self.assertNotIn("MAX", body.upper().replace("MAX_RESULTS", ""))
+        self.assertEqual(code, 200); self.assertEqual(json.loads(body)["max_rate"], 1100); self.assertNotIn("MAX_BUY", body)
+        self.assertNotIn("max_rate", self.req("/loads/search?origin_state=GA")[1])
         code, body = self.req("/negotiation/evaluate", {"load_id": "LD01031", "ask": 1500})
         self.assertEqual(json.loads(body), {"decision": "counter", "rate": 1100})
         self.assertEqual(self.req("/negotiation/evaluate", {"load_id": "LD01031", "ask": "x"})[0], 400)

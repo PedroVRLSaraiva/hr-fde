@@ -1,6 +1,6 @@
 # API do Adapter do TMS Legado
 
-> API HTTP/JSON que o workflow do agente de voz chama. Ela esconde o protocolo TCP do TMS legado, as falhas injetadas (~16% das chamadas) e o `MAX_BUY` (`max_rate`), que nunca aparece em nenhuma resposta.
+> API HTTP/JSON que o workflow do agente de voz chama. Ela esconde o protocolo TCP do TMS legado, as falhas injetadas (~16% das chamadas) e o `MAX_BUY` (`max_rate`), que só aparece em `GET /loads/{load_id}`.
 >
 > Código: `adapter/server.py` (HTTP) e `adapter/service.py` (regras). Protocolo do TMS: [`Integracao TMS Legado.md`](Integracao%20TMS%20Legado.md).
 > Exemplos abaixo foram executados com `curl` contra o TMS real em 2026-10-20.
@@ -61,7 +61,53 @@ curl -H "Authorization: Bearer $TMS_TOKEN" \
  "relaxed": false}
 ```
 
-Lista vazia: `{"loads": [], "relaxed": false}`. Estado ou equipamento desconhecido: `400`.
+**Campos de cada carga** (a mesma estrutura em `/loads/search` e `/loads/{load_id}`; `max_rate` só existe no detalhe, ver abaixo):
+
+| Campo | Tipo | Descrição |
+|---|---|---|
+| `load_id` | string | id da carga |
+| `origin`, `destination` | objeto | `city`, `state` (UF), `zip` (pode ser `null`) |
+| `pickup_datetime`, `delivery_datetime` | string ISO 8601 UTC | `delivery_datetime` pode ser `null` |
+| `equipment_type` | string | `DRY_VAN`, `REEFER`, `FLATBED`, `STEP_DECK` ou `POWER_ONLY` |
+| `loadboard_rate` | inteiro | valor anunciado, em USD |
+| `weight` | inteiro | peso (lb) |
+| `commodity_type` | string | tipo de mercadoria |
+| `num_of_pieces` | inteiro | número de peças |
+| `miles` | inteiro | distância |
+| `dimensions` | string | dimensões |
+| `notes` | string ou `null` | observações |
+| `status` | string | sempre `OPEN` nas respostas desta API |
+
+**Exemplo com cascata** (pediu `dest_state=TX`, não havia; relaxou o destino):
+```json
+{"loads": [
+  {"load_id": "LD01012",
+   "origin": {"city": "Atlanta", "state": "GA", "zip": "30303"},
+   "destination": {"city": "Jacksonville", "state": "FL", "zip": "32202"},
+   "pickup_datetime": "2026-10-26T13:03:00Z", "delivery_datetime": "2026-10-28T15:03:00Z",
+   "equipment_type": "FLATBED", "loadboard_rate": 755, "weight": 26713,
+   "commodity_type": "Machinery", "num_of_pieces": 6, "miles": 285,
+   "dimensions": "49ft x 8ft x 9ft", "notes": null, "status": "OPEN"},
+  {"load_id": "LD01044",
+   "origin": {"city": "Atlanta", "state": "GA", "zip": "30303"},
+   "destination": {"city": "Charlotte", "state": "NC", "zip": "28202"},
+   "pickup_datetime": "2026-10-27T09:00:00Z", "delivery_datetime": null,
+   "equipment_type": "FLATBED", "loadboard_rate": 640, "weight": 18200,
+   "commodity_type": "Steel coils", "num_of_pieces": 3, "miles": 244,
+   "dimensions": null, "notes": "Tarp required", "status": "OPEN"}
+ ],
+ "relaxed": true}
+```
+
+**Sem resultado:**
+```json
+{"loads": [], "relaxed": false}
+```
+
+**Estado ou equipamento desconhecido (`400`):**
+```json
+{"error": "bad_request", "detail": "equipamento desconhecido: 'caminhao'"}
+```
 
 ### `GET /loads/{load_id}`
 
@@ -72,6 +118,27 @@ Detalhe de uma carga para o pitch. Mesmo formato de um item de `loads` acima.
 | 200 | carga reservável |
 | 404 `load_unavailable` | carga existe mas está reservada ou com pickup vencido |
 | 404 `not_found` | id inexistente |
+
+Além dos campos da tabela, o detalhe traz `max_rate` (inteiro, USD): o teto que podemos pagar (`MAX_BUY`). Serve para o fluxo gravar o valor e o agente conhecê-lo explicitamente. **Nunca** vem em `/loads/search`, e o agente não deve revelá-lo ao carrier; ofertas acima dele são barradas em `/negotiation/evaluate` e `/book`.
+
+Exemplo `200`:
+```json
+{"load_id": "LD01012",
+ "origin": {"city": "Atlanta", "state": "GA", "zip": "30303"},
+ "destination": {"city": "Jacksonville", "state": "FL", "zip": "32202"},
+ "pickup_datetime": "2026-10-26T13:03:00Z", "delivery_datetime": "2026-10-28T15:03:00Z",
+ "equipment_type": "FLATBED", "loadboard_rate": 755, "weight": 26713,
+ "commodity_type": "Machinery", "num_of_pieces": 6, "miles": 285,
+ "dimensions": "49ft x 8ft x 9ft", "notes": null, "status": "OPEN",
+ "max_rate": 891}
+```
+Exemplo `404`:
+```json
+{"error": "load_unavailable"}
+```
+```json
+{"error": "not_found"}
+```
 
 ### `POST /negotiation/evaluate`
 
@@ -88,6 +155,18 @@ Corpo: `{"load_id": "LD01012", "ask": 700}` (`ask` inteiro positivo, em USD).
 curl -X POST -H "Authorization: Bearer $TMS_TOKEN" \
   -d '{"load_id":"LD01012","ask":5000}' http://127.0.0.1:8080/negotiation/evaluate
 # {"decision": "counter", "rate": 891}
+```
+
+Exemplos de resposta (`200`):
+```json
+{"decision": "accept", "rate": 700}
+```
+```json
+{"decision": "counter", "rate": 891}
+```
+`ask` inválido (`400`):
+```json
+{"error": "bad_request", "detail": "ask deve ser inteiro positivo"}
 ```
 
 Atenção: o `counter` devolve o próprio teto, ou seja, informa ao carrier o máximo que pagamos. O agente deve usá-lo como **última oferta**. Nunca é devolvido valor acima do teto. `ask` inválido: `400`.
@@ -121,6 +200,33 @@ curl -X POST -H "Authorization: Bearer $TMS_TOKEN" \
 # {"result": "error", "reason": "rate_above_ceiling"}
 ```
 
+Exemplos de resposta (todos `200`, exceto entrada inválida):
+```json
+{"result": "booked", "booking_ref": "LT9RTA3KPYMF2YCZ"}
+```
+```json
+{"result": "booked_unconfirmed"}
+```
+```json
+{"result": "unavailable"}
+```
+```json
+{"result": "error", "reason": "rate_above_ceiling"}
+```
+```json
+{"result": "error", "reason": "needs_human"}
+```
+```json
+{"result": "error", "reason": "lock_timeout"}
+```
+```json
+{"result": "error", "reason": "invalid_rate"}
+```
+`booking_ref` é opaco (16 caracteres): guardar como string, nunca parsear. Entrada inválida (`400`):
+```json
+{"error": "bad_request", "detail": "agreed_rate deve ser inteiro positivo"}
+```
+
 **Garantias**
 - Uma reserva por carga de cada vez (lock por `LOAD_ID`): se duas ligações fecham a mesma carga, uma recebe `booked` e a outra `unavailable`.
 - O `LOAD_BOOK` nunca é repetido às cegas: no máximo 2 tentativas, e a segunda só depois de uma falha sem resposta.
@@ -131,6 +237,11 @@ curl -X POST -H "Authorization: Bearer $TMS_TOKEN" \
 
 ```json
 {"adapter": "ok", "tms": "ok", "breaker_open": false, "metrics": {"DEBUG_ECHO.ok": 1}}
+```
+
+Com o TMS fora do ar e o circuit breaker aberto:
+```json
+{"adapter": "ok", "tms": "error:timeout", "breaker_open": true, "metrics": {"DEBUG_ECHO.ok": 1, "LOAD_QUERY.fail": 6}}
 ```
 
 `tms` usa `DEBUG_ECHO` (confirma conectividade e autenticação, **não** a saúde operacional, pois ele não passa pela injeção de falhas). `metrics` conta sucessos e falhas por comando.
@@ -144,6 +255,24 @@ curl -X POST -H "Authorization: Bearer $TMS_TOKEN" \
 | 404 | `{"error": "not_found"}` / `{"error": "load_unavailable"}` | rota ou carga inexistente / indisponível |
 | 502 | `{"error": "<codigo_do_tms>"}` | erro definitivo do TMS não mapeado |
 | 503 | `{"error": "TMS_UNAVAILABLE"}` | TMS fora do ar, ou circuit breaker aberto |
+
+Exemplos de corpo:
+```json
+{"error": "bad_request", "detail": "mc_num inválido"}
+```
+```json
+{"error": "unauthorized"}
+```
+```json
+{"error": "not_found"}
+```
+```json
+{"error": "invalid_rate"}
+```
+```json
+{"error": "TMS_UNAVAILABLE"}
+```
+(`400`, `401`, `404`, `502`, `503`, nesta ordem.)
 
 ## Resiliência
 
