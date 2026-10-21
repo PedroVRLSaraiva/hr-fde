@@ -1,6 +1,6 @@
 # API do Adapter do TMS Legado
 
-> API HTTP/JSON que o workflow do agente de voz chama. Ela esconde o protocolo TCP do TMS legado, as falhas injetadas (~16% das chamadas) e o `MAX_BUY` (`max_rate`), que só aparece em `GET /loads/{load_id}`.
+> API HTTP/JSON que o workflow do agente de voz chama. Ela esconde o protocolo TCP do TMS legado, as falhas injetadas (~16% das chamadas) e o `MAX_BUY` (`max_rate`), que aparece como `max_rate` em `GET /loads/search` e `GET /loads/{load_id}`.
 >
 > Código: `adapter/server.py` (HTTP) e `adapter/service.py` (regras). Protocolo do TMS: [`Integracao TMS Legado.md`](Integracao%20TMS%20Legado.md).
 > Exemplos abaixo foram executados com `curl` contra o TMS real em 2026-10-20.
@@ -57,11 +57,11 @@ curl -H "Authorization: Bearer $TMS_TOKEN" \
   "pickup_datetime": "2026-10-26T13:03:00Z", "delivery_datetime": "2026-10-28T15:03:00Z",
   "equipment_type": "FLATBED", "loadboard_rate": 755, "weight": 26713,
   "commodity_type": "Machinery", "num_of_pieces": 6, "miles": 285,
-  "dimensions": "49ft x 8ft x 9ft", "notes": null, "status": "OPEN"}],
+  "dimensions": "49ft x 8ft x 9ft", "notes": null, "status": "OPEN", "max_rate": 891}],
  "relaxed": false}
 ```
 
-**Campos de cada carga** (a mesma estrutura em `/loads/search` e `/loads/{load_id}`; `max_rate` só existe no detalhe, ver abaixo):
+**Campos de cada carga** (a mesma estrutura em `/loads/search` e `/loads/{load_id}`; inclui `max_rate`):
 
 | Campo | Tipo | Descrição |
 |---|---|---|
@@ -77,6 +77,7 @@ curl -H "Authorization: Bearer $TMS_TOKEN" \
 | `dimensions` | string | dimensões |
 | `notes` | string ou `null` | observações |
 | `status` | string | sempre `OPEN` nas respostas desta API |
+| `max_rate` | inteiro | teto que podemos pagar (`MAX_BUY`), em USD. **Uso interno:** o agente grava no fluxo e nunca revela ao carrier |
 
 **Exemplo com cascata** (pediu `dest_state=TX`, não havia; relaxou o destino):
 ```json
@@ -87,14 +88,14 @@ curl -H "Authorization: Bearer $TMS_TOKEN" \
    "pickup_datetime": "2026-10-26T13:03:00Z", "delivery_datetime": "2026-10-28T15:03:00Z",
    "equipment_type": "FLATBED", "loadboard_rate": 755, "weight": 26713,
    "commodity_type": "Machinery", "num_of_pieces": 6, "miles": 285,
-   "dimensions": "49ft x 8ft x 9ft", "notes": null, "status": "OPEN"},
+   "dimensions": "49ft x 8ft x 9ft", "notes": null, "status": "OPEN", "max_rate": 891},
   {"load_id": "LD01044",
    "origin": {"city": "Atlanta", "state": "GA", "zip": "30303"},
    "destination": {"city": "Charlotte", "state": "NC", "zip": "28202"},
    "pickup_datetime": "2026-10-27T09:00:00Z", "delivery_datetime": null,
    "equipment_type": "FLATBED", "loadboard_rate": 640, "weight": 18200,
    "commodity_type": "Steel coils", "num_of_pieces": 3, "miles": 244,
-   "dimensions": null, "notes": "Tarp required", "status": "OPEN"}
+   "dimensions": null, "notes": "Tarp required", "status": "OPEN", "max_rate": 720}
  ],
  "relaxed": true}
 ```
@@ -119,7 +120,7 @@ Detalhe de uma carga para o pitch. Mesmo formato de um item de `loads` acima.
 | 404 `load_unavailable` | carga existe mas está reservada ou com pickup vencido |
 | 404 `not_found` | id inexistente |
 
-Além dos campos da tabela, o detalhe traz `max_rate` (inteiro, USD): o teto que podemos pagar (`MAX_BUY`). Serve para o fluxo gravar o valor e o agente conhecê-lo explicitamente. **Nunca** vem em `/loads/search`, e o agente não deve revelá-lo ao carrier; ofertas acima dele são barradas em `/negotiation/evaluate` e `/book`.
+Os campos são os da tabela acima, incluindo `max_rate`. Ofertas acima dele são barradas em `/negotiation/evaluate` e `/book`.
 
 Exemplo `200`:
 ```json
@@ -129,8 +130,7 @@ Exemplo `200`:
  "pickup_datetime": "2026-10-26T13:03:00Z", "delivery_datetime": "2026-10-28T15:03:00Z",
  "equipment_type": "FLATBED", "loadboard_rate": 755, "weight": 26713,
  "commodity_type": "Machinery", "num_of_pieces": 6, "miles": 285,
- "dimensions": "49ft x 8ft x 9ft", "notes": null, "status": "OPEN",
- "max_rate": 891}
+ "dimensions": "49ft x 8ft x 9ft", "notes": null, "status": "OPEN", "max_rate": 891}
 ```
 Exemplo `404`:
 ```json

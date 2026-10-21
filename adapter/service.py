@@ -1,5 +1,5 @@
 """Regras de negócio do adapter: normalização, busca em cascata, cache, negociação,
-lock por carga e máquina de estados do booking. `max_rate` (MAX_BUY) só sai em get_load."""
+lock por carga e máquina de estados do booking. `max_rate` (MAX_BUY) sai em search e get_load."""
 import re
 import threading
 import time
@@ -69,8 +69,8 @@ def iso_utc(dt):
 
 
 def public_load(g):
-    """Allowlist de campos para o agente. `max_rate` NÃO está aqui de propósito."""
-    return {
+    """Allowlist de campos para o agente. `max_rate` (MAX_BUY) é exposto de propósito, para o fluxo gravá-lo."""
+    out = {
         "load_id": g["LOAD_ID"],
         "origin": {"city": g["ORIG_CITY"], "state": g["ORIG_STATE"], "zip": g.get("ORIG_ZIP")},
         "destination": {"city": g["DEST_CITY"], "state": g["DEST_STATE"], "zip": g.get("DEST_ZIP")},
@@ -86,6 +86,9 @@ def public_load(g):
         "notes": g.get("NOTES") or None,
         "status": g["STATUS"],
     }
+    if "MAX_BUY" in g:
+        out["max_rate"] = g["MAX_BUY"]
+    return out
 
 
 def is_bookable(rec, now=None):
@@ -205,10 +208,7 @@ class Service:
         g = self._raw_get(load_id)
         if not is_bookable(g):
             raise LookupError("carga indisponível")
-        out = public_load(g)
-        if "MAX_BUY" in g:
-            out["max_rate"] = g["MAX_BUY"]   # só no detalhe: o agente grava no fluxo; a busca continua sem teto
-        return out
+        return public_load(g)
 
     def evaluate(self, load_id, ask):
         g = self._raw_get(load_id)
