@@ -2,3 +2,5 @@
 .gstack/
 __pycache__/
 discovery/results/
+interno/
+discovery/
