@@ -18,6 +18,8 @@ The adapter has **no third-party dependencies**: it uses only the Python 3 stand
 | `tests/` | Automated tests (see [Running the tests](#running-the-tests)). |
 | `Dockerfile`, `.dockerignore` | Container image for the adapter. |
 | `deploy-azure.sh` | One-command deploy to Azure Container Apps. |
+| `deploy-gcp.sh` | One-command deploy to Google Cloud Run. |
+| `deploy-aws.sh` | One-command deploy to AWS App Runner. |
 | `.env.example` | Template for the configuration variables. |
 
 A good reading order for newcomers: `server.py` (what the API exposes) → `service.py` (what it does) → `tms_client.py` (how it talks to the TMS).
@@ -158,7 +160,11 @@ docker run --rm -p 8080:8080 \
 
 The image is based on `python:3.12-slim`, includes a health check on `/healthz`, and contains only the `adapter/` package (no tests, no secrets).
 
-## Deploying to Azure Container Apps
+## Deploying to the cloud
+
+The same image runs on any of the three clouds below. Each script reads `TMS_HOST`, `TMS_PORT` and `TMS_TOKEN` from `.env` or the environment, stores the token as a cloud secret (never in the image), pins the app to exactly one instance, and finishes with a smoke test on `/healthz` and `/health`. Pick one.
+
+### Azure Container Apps
 
 Prerequisite: the Azure CLI installed.
 
@@ -180,3 +186,35 @@ The script reads `TMS_HOST`, `TMS_PORT` and `TMS_TOKEN` from `.env` or the envir
 3. Prints the public URL and runs a smoke test against `/healthz` and `/health`.
 
 Optional overrides: `APP_NAME` (default `tms-adapter`), `RESOURCE_GROUP` (default `rg-tms-adapter`), `LOCATION` (default `centralus`).
+
+### Google Cloud Run
+
+Prerequisites: the `gcloud` CLI installed and a Google Cloud project with billing enabled.
+
+**One-line deploy:**
+
+```bash
+gcloud auth login && GCP_PROJECT=<project-id> TMS_HOST=<host> TMS_PORT=<port> TMS_TOKEN=<token> ./deploy-gcp.sh
+```
+
+With a `.env` and a default project (`gcloud config set project <project-id>`), it is just `./deploy-gcp.sh`.
+
+The script enables the required APIs, stores the token in Secret Manager, builds the image with Cloud Build and deploys it to Cloud Run with a public HTTPS URL and CPU always allocated.
+
+Optional overrides: `APP_NAME` (default `tms-adapter`), `GCP_PROJECT` (default: your active gcloud project), `REGION` (default `us-central1`).
+
+### AWS App Runner
+
+Prerequisites: AWS CLI v2 and Docker installed, and AWS credentials configured. The identity needs permissions for ECR, Secrets Manager, IAM roles and App Runner.
+
+**One-line deploy:**
+
+```bash
+aws sso login && TMS_HOST=<host> TMS_PORT=<port> TMS_TOKEN=<token> ./deploy-aws.sh
+```
+
+(Use `aws configure` once instead of `aws sso login` if you authenticate with access keys.) With a `.env` and active credentials, it is just `./deploy-aws.sh`.
+
+The script builds the image locally for `linux/amd64`, pushes it to a private ECR repository, stores the token in Secrets Manager, creates the two IAM roles App Runner needs (one to pull the image, one to read the secret), and creates the service with a public HTTPS URL. Running it again redeploys the latest image.
+
+Optional overrides: `APP_NAME` (default `tms-adapter`), `AWS_REGION` (default `us-east-2`).
